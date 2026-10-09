@@ -6,11 +6,12 @@
 /*   By: spuschma <spuschma@student.42vienna.com>  #+#  +:+       +#+         */
 /*                                               +#+#+#+#+#+   +#+            */
 /*   Created: 2026/10/07 13:22:21 by spuschma         #+#    #+#              */
-/*   Updated: 2026/10/09 15:11:58 by spuschma        ###   ########.fr        */
+/*   Updated: 2026/10/09 18:09:36 by spuschma        ###   ########.fr        */
 /*                                                                            */
 /* ************************************************************************** */
 #include <__stdarg_va_list.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -19,7 +20,7 @@ typedef struct s_line
 	char	*str;
 	size_t	end;
 	size_t	size;
-	size_t	newline;
+	ssize_t	nl;
 }			t_line;
 
 size_t		BUFFER_SIZE = 2048;
@@ -48,16 +49,10 @@ char	*get_leftover(t_line line)
 	size_t	i;
 	size_t	j;
 
-	size = line.end - line.newline;
-	if (size == 0)
-	{
-		ret = malloc(1);
-		*ret = 0;
-		return (ret);
-	}
 	ret = malloc(BUFFER_SIZE);
+	size = line.end - line.nl;
 	i = -1;
-	j = line.newline + 1;
+	j = line.nl + 1;
 	while (++i < size - 1)
 		ret[i] = line.str[j++];
 	while (i < size)
@@ -65,51 +60,71 @@ char	*get_leftover(t_line line)
 	return (ret);
 }
 
-int	init_line(char *buf, t_line *line)
+int	init_line(char *buf, t_line *l)
 {
-	line->size = BUFFER_SIZE;
-	line->str = buf;
-	if (!line->str)
-		line->str = malloc(line->size);
-	if (!line->str)
-		return (0);
-	line->end = -1;
-	while (line->str[++line->end])
-		;
+	l->size = BUFFER_SIZE;
+	l->str = buf;
+	if (!l->str)
+	{
+		l->str = malloc(l->size);
+		if (!l->str)
+			return (0);
+		l->str[0] = '\0';
+	}
+	l->end = -1;
+	l->nl = -1;
+	while (l->str[++l->end])
+		if (l->nl < 0 && l->str[l->end] == '\n')
+			l->nl = l->end;
 	return (1);
+}
+
+int	read_buf(t_line *l, int fd)
+{
+	ssize_t	read_result;
+	size_t	i;
+
+	read_result = read(fd, l->str + l->end, BUFFER_SIZE);
+	i = l->end;
+	l->end += read_result;
+	while (i < l->end)
+	{
+		if (l->str[i] == '\n')
+		{
+			l->nl = i;
+			break ;
+		}
+		i++;
+	}
+	return (read_result);
 }
 
 char	*get_next_line(int fd)
 {
-	static char	*buffers[1024];
-	t_line		line;
-	ssize_t		read_result;
+	static char	*bufs[1024];
+	t_line		l;
 
-	if (!init_line(buffers[fd], &line))
+	if (fd < 0 || fd > 1024)
 		return (NULL);
-	while (1)
+	if (!init_line(bufs[fd], &l))
+		return (NULL);
+	bufs[fd] = NULL;
+	while (l.nl < 0)
 	{
-		if (line.end + BUFFER_SIZE > line.size)
-			if (!double_line_size(&line))
+		if (l.end + BUFFER_SIZE >= l.size)
+			if (!double_line_size(&l))
 				return (NULL);
-		read_result = read(fd, line.str + line.end, BUFFER_SIZE);
-		if (!read_result)
-		{
-			if (!line.newline)
-				return (NULL);
-			line.str[line.end] = '\n';
-		}
-		while (read_result--)
-		{
-			if (line.str[line.end++] != '\n')
-				continue ;
-			line.newline = line.end - 1;
-			line.end += read_result;
-			buffers[fd] = get_leftover(line);
-			line.str[line.newline + 1] = '\0';
-			if (!buffers[fd])
-				return (NULL);
-			return (line.str);
-		}
+		if (!read_buf(&l, fd))
+			break ;
 	}
+	if (l.nl < 0)
+	{
+		if (l.end > 0)
+			return (l.str[l.end] = 0, free(bufs[fd]), bufs[fd] = NULL, l.str);
+		return (free(bufs[fd]), bufs[fd] = NULL, free(l.str), NULL);
+	}
+	bufs[fd] = get_leftover(l);
+	if (!bufs[fd])
+		return (free(l.str), NULL);
+	return (l.str[l.nl + 1] = 0, l.str);
 }
